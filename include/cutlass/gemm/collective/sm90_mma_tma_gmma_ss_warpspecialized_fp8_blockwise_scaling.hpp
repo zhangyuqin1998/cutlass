@@ -148,7 +148,7 @@ struct CollectiveMma<
   using SmemBlockScalingCopyAtomB = Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<ElementBlockScale>, ElementBlockScale>;
   
   // Block scaling smem layout
-  using SmemLayoutScaleA = Layout<Shape<Int<ScaleMsPerTile>, Int<DispatchPolicy::Stages>>, Stride<Int<DispatchPolicy::Stages>, _1>>;
+  using SmemLayoutScaleA = Layout<Shape<Int<ScaleMsPerTile>, Int<DispatchPolicy::Stages>>>;
   using SmemLayoutScaleB = Layout<Shape<Int<DispatchPolicy::Stages>>, Stride<_1>>; // `ScaleNsPerTile` is always 1.
 
   static_assert(DispatchPolicy::Stages >= 2, "Specialization requires Stages set to value 1 or more.");
@@ -323,7 +323,7 @@ struct CollectiveMma<
 
     // Make the tiled views of scale tensors
     auto scaleA_shape = make_shape(get<2>(gA_mkl.shape()), Int<ScaleMsPerTile>{}, get<3>(gA_mkl.shape()), get<4>(gA_mkl.shape())); // (m,ScaleMsPerTile,k,l)
-    auto scale_dA = make_stride(get<3>(gA_mkl.shape()) * Int<ScaleMsPerTile>{}, get<3>(gA_mkl.shape()), Int<1>{}, get<2>(gA_mkl.shape()) * get<3>(gA_mkl.shape()) * Int<ScaleMsPerTile>{});
+    auto scale_dA = make_stride(get<3>(gA_mkl.shape()) * Int<ScaleMsPerTile>{}, Int<1>{}, Int<ScaleMsPerTile>{}, get<2>(gA_mkl.shape()) * get<3>(gA_mkl.shape()) * Int<ScaleMsPerTile>{});
 
     auto scaleA_layout = make_layout(scaleA_shape, scale_dA);
     auto scaleB_shape = make_shape(get<2>(gB_nkl.shape()), get<3>(gB_nkl.shape()), get<4>(gB_nkl.shape())); // (n,k,l)
@@ -391,7 +391,7 @@ struct CollectiveMma<
       Tensor gScaleA = mScaleA_mkl(m_coord,_,_,l_coord); // (1,ScaleMsPerTile,k,1)
       Tensor gScaleB = mScaleB_nkl(n_coord,_,l_coord);                                           // (1,k,1)
       
-      TiledCopy scale_copy_a = make_tiled_copy(SmemBlockScalingCopyAtomA{}, Layout<Shape<_1>>{}, Layout<Shape<Int<ScaleMsPerTile>, _1>>{}); // (1,ScaleMsPerTile,1)
+      TiledCopy scale_copy_a = make_tiled_copy(SmemBlockScalingCopyAtomA{}, Layout<Shape<_1>>{}, Layout<Shape<Int<ScaleMsPerTile>>>{}); // (1,ScaleMsPerTile,1)
       TiledCopy scale_copy_b = make_tiled_copy(SmemBlockScalingCopyAtomB{}, Layout<Shape<_1>>{}, Layout<Shape<_1>>{}); // (1,1,1)
       ThrCopy thr_scale_copy_a = scale_copy_a.get_slice(threadIdx.x);
       ThrCopy thr_scale_copy_b = scale_copy_b.get_slice(threadIdx.x);
@@ -448,13 +448,7 @@ struct CollectiveMma<
 
         // Copy scale tensors from global memory to shared memory
 
-        // copy(scale_copy_a, tAgA_ScaleA(_,_,*k_tile_iter), tAsA_ScaleA(_,_,write_stage));
-        // NOTE(zhangyuqin): cute::copy will fail in static_assert. Need to find out the reason.
-        CUTLASS_PRAGMA_UNROLL
-        for (int i = 0; i < ScaleMsPerTile; ++i) {
-          // The second dimension of tAsA_ScaleA is broadcast by the stride
-          tAsA_ScaleA(i, 0, write_stage) = tAgA_ScaleA(i, 0, *k_tile_iter);
-        }
+        copy(scale_copy_a, tAgA_ScaleA(_,_,*k_tile_iter), tAsA_ScaleA(_,_,write_stage));
         copy(scale_copy_b, tBgB_ScaleB(_,*k_tile_iter), tBsB_ScaleB(_,write_stage));
 
         pipeline.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive_noinc);
@@ -514,11 +508,10 @@ struct CollectiveMma<
     
     // Block scaling
     Tensor sScaleAViewAsC = make_tensor(cute::make_smem_ptr(shared_tensors.smem_scale_A.data()),
-      make_layout(
-        Shape<Shape<Int<ScaleGranularityM>, Int<ScaleMsPerTile>>, cute::tuple_element_t<1, TileShape>, Int<DispatchPolicy::Stages>>{},
-        make_stride(make_stride(0, DispatchPolicy::Stages), 0, 1)
-      ));
-
+      Layout<
+        Shape<Shape<Int<ScaleGranularityM>, Int<ScaleMsPerTile>>, cute::tuple_element_t<1, TileShape>, Int<DispatchPolicy::Stages>>,
+        Stride<Stride<_0, _1>, _0, Int<ScaleMsPerTile>>
+      >{}); // ((ScaleGranularityM,ScaleMsPerTile),n,k)
     Tensor sScaleB = make_tensor(cute::make_smem_ptr(shared_tensors.smem_scale_B.data()), SmemLayoutScaleB{}); // (k)
 
     //
@@ -596,12 +589,20 @@ struct CollectiveMma<
       
       // Load per block scale values from shared memory to registers.
       scale_b = sScaleB[read_stage];
-
-
       CUTLASS_PRAGMA_UNROLL
       for (int i = 0; i < size(RegLayoutScaleAEssential{}); i++) {
-        tCrScaleAViewAsC.data()[i] = tCsScaleAViewAsC(_, _, _, read_stage)(idx2crd(i, RegLayoutScaleAEssential{})) * scale_b;;
+        tCrScaleAViewAsC.data()[i] = tCsScaleAViewAsC(_, _, _, read_stage)(idx2crd(i, RegLayoutScaleAEssential{}));
       }
+      if constexpr (ScaleMsPerTile == 1) {
+        static_assert(size(RegLayoutScaleAEssential{}) == 1);
+        tCrScaleAViewAsC.data()[0] = __shfl_sync(0xffffffff, tCrScaleAViewAsC.data()[0] * scale_b, 0); // `tCrScaleAViewAsC.data()[0]` are all same in a warp group when `ScaleMsPerTile == 1`.
+      } else {
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < size(RegLayoutScaleAEssential{}); i++) {
+          tCrScaleAViewAsC.data()[i] = tCrScaleAViewAsC.data()[i] * scale_b;
+        }
+      }
+
       warpgroup_arrive();
       // Unroll the K mode manually to set scale D to 1
       CUTLASS_PRAGMA_UNROLL
@@ -639,7 +640,16 @@ struct CollectiveMma<
       scale_b = sScaleB[read_stage];
       CUTLASS_PRAGMA_UNROLL
       for (int i = 0; i < size(RegLayoutScaleAEssential{}); i++) {
-        tCrScaleAViewAsC.data()[i] = tCsScaleAViewAsC(_, _, _, read_stage)(idx2crd(i, RegLayoutScaleAEssential{})) * scale_b;;
+        tCrScaleAViewAsC.data()[i] = tCsScaleAViewAsC(_, _, _, read_stage)(idx2crd(i, RegLayoutScaleAEssential{}));
+      }
+      if constexpr (ScaleMsPerTile == 1) {
+        static_assert(size(RegLayoutScaleAEssential{}) == 1);
+        tCrScaleAViewAsC.data()[0] = __shfl_sync(0xffffffff, tCrScaleAViewAsC.data()[0] * scale_b, 0); // `tCrScaleAViewAsC.data()[0]` are all same in a warp group when `ScaleMsPerTile == 1`.
+      } else {
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < size(RegLayoutScaleAEssential{}); i++) {
+          tCrScaleAViewAsC.data()[i] = tCrScaleAViewAsC.data()[i] * scale_b;
+        }
       }
 
       if (accumulation.prepare_if_needed()) {

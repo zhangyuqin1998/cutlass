@@ -104,6 +104,8 @@ struct CPY_Op<Copy_Traits<CPY_Op_Arg, Args...>> {
 //
 // Generic copy_unpack for common argument-based Copy_Traits
 //
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
 
 template <class AnyCPYTraits,
           class SEngine, class SLayout,
