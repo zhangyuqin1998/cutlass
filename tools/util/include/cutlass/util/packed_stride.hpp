@@ -68,6 +68,28 @@ make_cute_packed_stride(cute::Stride<cute::Int<1>, IntT> s, cute::Shape<int,int,
   return s_copy;
 }
 
+template <class IntT>
+CUTLASS_HOST_DEVICE
+cute::Stride<IntT, cute::Int<1>>
+make_cute_packed_stride(cute::Stride<IntT, cute::Int<1>> s, cute::Shape<int64_t,int64_t,int64_t> shape_MKL) {
+  static_assert(std::is_integral_v<IntT>,
+    "Stride must have an integral type so it can be set dynamically. Static strides not supported.");
+  auto s_copy = s;
+  cute::get<0>(s_copy) = static_cast<IntT>(cute::get<1>(shape_MKL));
+  return s_copy;
+}
+
+template <class IntT>
+CUTLASS_HOST_DEVICE
+cute::Stride<cute::Int<1>, IntT>
+make_cute_packed_stride(cute::Stride<cute::Int<1>, IntT> s, cute::Shape<int64_t,int64_t,int64_t> shape_MKL) {
+  static_assert(std::is_integral_v<IntT>,
+    "Stride must have an integral type so it can be set dynamically. Static strides not supported.");
+  auto s_copy = s;
+  cute::get<1>(s_copy) = static_cast<IntT>(cute::get<0>(shape_MKL));
+  return s_copy;
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Strides with batch mode
@@ -108,6 +130,42 @@ make_cute_packed_stride(cute::Stride<cute::Int<1>, IntT, int64_t> s, cute::Shape
   return s_copy;
 }
 
+template <class IntT>
+CUTLASS_HOST_DEVICE
+cute::Stride<IntT, cute::Int<1>, int64_t>
+make_cute_packed_stride(cute::Stride<IntT, cute::Int<1>, int64_t> s, cute::Shape<int64_t,int64_t,int64_t> shape_MKL) {
+  static_assert(std::is_integral_v<IntT>,
+    "Stride must have an integral type so it can be set dynamically. Static strides not supported.");
+  auto s_copy = s;
+  cute::get<0>(s_copy) = static_cast<IntT>(cute::get<1>(shape_MKL));
+  int batch_count =  cute::get<2>(shape_MKL);
+  if (batch_count > 1) {
+    cute::get<2>(s_copy) = static_cast<IntT>(cute::get<0>(shape_MKL) * cute::get<1>(shape_MKL));
+  }
+  else {
+    cute::get<2>(s_copy) = static_cast<IntT>(0);
+  }
+  return s_copy;
+}
+
+template <class IntT>
+CUTLASS_HOST_DEVICE
+cute::Stride<cute::Int<1>, IntT, int64_t>
+make_cute_packed_stride(cute::Stride<cute::Int<1>, IntT, int64_t> s, cute::Shape<int64_t,int64_t,int64_t> shape_MKL) {
+  static_assert(std::is_integral_v<IntT>,
+    "Stride must have an integral type so it can be set dynamically. Static strides not supported.");
+  auto s_copy = s;
+  cute::get<1>(s_copy) = static_cast<IntT>(cute::get<0>(shape_MKL));
+  int batch_count =  cute::get<2>(shape_MKL);
+  if (batch_count > 1) {
+    cute::get<2>(s_copy) = static_cast<IntT>(cute::get<0>(shape_MKL) * cute::get<1>(shape_MKL));
+  }
+  else {
+    cute::get<2>(s_copy) = static_cast<IntT>(0);
+  }
+  return s_copy;
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Strides with group mode
@@ -134,6 +192,28 @@ make_cute_packed_stride(cute::Stride<cute::Int<1>, StrideIntT, cute::Int<0>> s, 
   return s_copy;
 }
 
+
+template <class StrideIntT>
+CUTLASS_HOST_DEVICE
+cute::Stride<StrideIntT, cute::Int<1>, cute::Int<0>>
+make_cute_packed_stride(cute::Stride<StrideIntT, cute::Int<1>, cute::Int<0>> s, cute::Shape<int64_t,int64_t,int64_t> shape_MKL) {
+  static_assert(std::is_integral_v<StrideIntT>,
+    "Stride must have an integral type so it can be set dynamically. Static strides not supported.");
+  auto s_copy = s;
+  cute::get<0>(s_copy) = static_cast<StrideIntT>(cute::get<1>(shape_MKL));
+  return s_copy;
+}
+
+template <class StrideIntT>
+CUTLASS_HOST_DEVICE
+cute::Stride<cute::Int<1>, StrideIntT, cute::Int<0>>
+make_cute_packed_stride(cute::Stride<cute::Int<1>, StrideIntT, cute::Int<0>> s, cute::Shape<int64_t,int64_t,int64_t> shape_MKL) {
+  static_assert(std::is_integral_v<StrideIntT>,
+    "Stride must have an integral type so it can be set dynamically. Static strides not supported.");
+  auto s_copy = s;
+  cute::get<1>(s_copy) = static_cast<StrideIntT>(cute::get<0>(shape_MKL));
+  return s_copy;
+}
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Strides for convolutions
