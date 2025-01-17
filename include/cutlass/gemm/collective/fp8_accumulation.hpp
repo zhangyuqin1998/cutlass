@@ -164,6 +164,25 @@ public:
     }
   }
 
+  template <
+    class EngineScale,
+    class LayoutScale>
+  CUTLASS_DEVICE
+  void unsafe_scale(const cute::Tensor<EngineScale, LayoutScale> &scale) {
+    using TensorScale = cute::Tensor<EngineScale, LayoutScale>;
+
+    static_assert(is_static<LayoutScale>::value, "Scale Layout should be static");
+    static_assert(is_rmem<TensorScale>::value , "Scale tensor must be rmem resident.");
+
+    static_assert(LayoutAccum{}.shape() == LayoutScale{}.shape(), "Accumulator and scale must have same shape.");
+    warpgroup_wait<0>();
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < size(accum_); ++i) {
+      accum_(i) = (accum_(i) + accum_temp_(i)) * scale(i);
+      // accum_(i) *= scale(i);
+    }
+  }
+
   /// scale (multiply_add) the residue results from the MMA accumulators to main accumulator if needed.
   template <
     class EngineScale,

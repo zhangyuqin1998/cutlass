@@ -131,6 +131,8 @@ template<
 >
 struct KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum: KernelTmaWarpSpecializedCooperative { };
 
+struct KernelTmaWarpSpecializedCooperativeFP8RowWise: KernelTmaWarpSpecializedCooperative { };
+
 // Policies to opt into mixed type GEMMs
 struct KernelTmaWarpSpecializedMixedInput : KernelTmaWarpSpecialized { };
 struct KernelTmaWarpSpecializedPingpongMixedInput : KernelTmaWarpSpecializedPingpong { };
@@ -306,6 +308,17 @@ struct MainloopSm90TmaGmmaWarpSpecializedBlockScalingFP8
     "KernelSchedule must be one of the warp specialized policies");
 };
 
+template<
+  int Stages_,
+  class ClusterShape_ = Shape<_1,_1,_1>,
+  class KernelSchedule = KernelTmaWarpSpecialized
+>
+struct MainloopSm90TmaGmmaWarpSpecializedRowWiseFP8
+  : MainloopSm90TmaGmmaWarpSpecialized<Stages_, ClusterShape_, KernelSchedule> {
+  static_assert(
+    cute::is_same_v<KernelSchedule, KernelTmaWarpSpecializedCooperativeFP8RowWise>,
+    "KernelSchedule must be one of the warp specialized policies");
+};
 
 // n-buffer in smem (Hopper TMA), pipelined with Hopper GMMA and TMA, Warp specialized dynamic schedule for Ptr-Array and Grouped Gemm
 template<
