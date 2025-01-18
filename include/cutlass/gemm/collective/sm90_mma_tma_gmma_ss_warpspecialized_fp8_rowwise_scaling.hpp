@@ -413,15 +413,15 @@ struct CollectiveMma<
         // }
 
         // Copy operands A and B from global memory to shared memory
+        copy(mainloop_params.tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
+        copy(mainloop_params.tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,write_stage));
+
         if (k_tile_count  == 1) {
           // 只拷贝一次就行了
-          copy(mainloop_params.tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
-          copy(mainloop_params.tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,write_stage));
+          // Copy scale tensors from global memory to shared memory
+          copy(scale_copy_a, tAgA_ScaleA, tAsA_ScaleA);
+          copy(scale_copy_b, tBgB_ScaleB, tBsB_ScaleB);
         }
-        // Copy scale tensors from global memory to shared memory
-
-        copy(scale_copy_a, tAgA_ScaleA, tAsA_ScaleA);
-        copy(scale_copy_b, tBgB_ScaleB, tBsB_ScaleB);
 
         pipeline.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive_noinc);
 
