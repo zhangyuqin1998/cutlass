@@ -278,11 +278,11 @@ struct CollectiveMma<
 
     // Make the tiled views of scale tensors
     auto scaleA_shape = make_shape(shape<0>(TileShape{}), M / shape<0>(TileShape{})); // (BLK_M,m)
-    auto scale_dA = make_stride(1, shape<0>(TileShape{}));
+    auto scale_dA = make_stride(Int<1>{}, shape<0>(TileShape{}));
     auto scaleA_layout = make_layout(scaleA_shape, scale_dA);
 
     auto scaleB_shape = make_shape(shape<1>(TileShape{}), N / shape<1>(TileShape{})); // (BLK_N,n)
-    auto scale_dB = make_stride(1, shape<1>(TileShape{}));
+    auto scale_dB = make_stride(Int<1>{}, shape<1>(TileShape{}));
     auto scaleB_layout = make_layout(scaleB_shape, scale_dB);
 
     // // // Note that mScaleA_mkl and mScaleB_nkl are already blocked tiled in the `m` host and 
@@ -347,19 +347,20 @@ struct CollectiveMma<
       Tensor gScaleA = mScaleA_mkl(_,m_coord);  // (BLK_M)
       Tensor gScaleB = mScaleB_nkl(_,n_coord);  // (BLK_N)
       
-    //   static constexpr int BLK_M = size<0>(gScaleA);
-    //   static constexpr int BLK_N = size<0>(gScaleB);
+      static constexpr int BLK_M = size<0>(gScaleA);
+      static constexpr int BLK_N = size<0>(gScaleB);
 
-    //   TiledCopy scale_copy_a = make_tiled_copy(SmemScalingCopyAtomA{}, Layout<Shape<_1>>{}, Layout<Shape<Int<1>>>{});
-    //   TiledCopy scale_copy_b = make_tiled_copy(SmemScalingCopyAtomB{}, Layout<Shape<_1>>{}, Layout<Shape<Int<1>>>{});
-    //   ThrCopy thr_scale_copy_a = scale_copy_a.get_slice(threadIdx.x);
-    //   ThrCopy thr_scale_copy_b = scale_copy_b.get_slice(threadIdx.x);
+      TiledCopy scale_copy_a = make_tiled_copy(SmemScalingCopyAtomA{}, Layout<Shape<_1>>{}, Layout<Shape<Int<BLK_M>>>{});
+      TiledCopy scale_copy_b = make_tiled_copy(SmemScalingCopyAtomB{}, Layout<Shape<_1>>{}, Layout<Shape<Int<BLK_N>>>{});
 
-    //   Tensor tAgA_ScaleA = thr_scale_copy_a.partition_S(gScaleA);
-    //   Tensor tAsA_ScaleA = thr_scale_copy_a.partition_D(sScaleA);
+      ThrCopy thr_scale_copy_a = scale_copy_a.get_slice(threadIdx.x);
+      ThrCopy thr_scale_copy_b = scale_copy_b.get_slice(threadIdx.x);
 
-    //   Tensor tBgB_ScaleB = thr_scale_copy_b.partition_S(gScaleB);
-    //   Tensor tBsB_ScaleB = thr_scale_copy_b.partition_D(sScaleB);
+      Tensor tAgA_ScaleA = thr_scale_copy_a.partition_S(gScaleA);
+      Tensor tAsA_ScaleA = thr_scale_copy_a.partition_D(sScaleA);
+
+      Tensor tBgB_ScaleB = thr_scale_copy_b.partition_S(gScaleB);
+      Tensor tBsB_ScaleB = thr_scale_copy_b.partition_D(sScaleB);
       
       // Applies the mapping from block_tma_a
       Tensor tAgA = block_tma_a.partition_S(gA);                                              // (TMA,TMA_M,TMA_K,k)
@@ -400,24 +401,25 @@ struct CollectiveMma<
         using BarrierType = typename MainloopPipeline::ProducerBarrierType;
         BarrierType* tma_barrier = pipeline.producer_get_barrier(smem_pipe_write);
 
-        if (k_tile_count  == 1) {
-          CUTLASS_PRAGMA_UNROLL
-          for (int i = 0; i < size<0>(gScaleA); i++) {
-              sScaleA[i] = gScaleA[i];
-          }
-          CUTLASS_PRAGMA_UNROLL
-          for (int i = 0; i < size<0>(gScaleB); i++) {
-              sScaleB[i] = gScaleB[i];
-          }
-        }
+        // if (k_tile_count  == 1) {
+        //   CUTLASS_PRAGMA_UNROLL
+        //   for (int i = 0; i < size<0>(gScaleA); i++) {
+        //       sScaleA[i] = gScaleA[i];
+        //   }
+        //   CUTLASS_PRAGMA_UNROLL
+        //   for (int i = 0; i < size<0>(gScaleB); i++) {
+        //       sScaleB[i] = gScaleB[i];
+        //   }
+        // }
+
         // Copy operands A and B from global memory to shared memory
         copy(mainloop_params.tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
         copy(mainloop_params.tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,write_stage));
 
         // Copy scale tensors from global memory to shared memory
 
-        // copy(scale_copy_a, tAgA_ScaleA(_,0), tAsA_ScaleA(_,0));
-        // copy(scale_copy_b, tBgB_ScaleB(_,_,0), tBsB_ScaleB(_,_,0));
+        copy(scale_copy_a, tAgA_ScaleA, tAsA_ScaleA);
+        copy(scale_copy_b, tBgB_ScaleB, tBsB_ScaleB);
 
         pipeline.producer_commit(smem_pipe_write, cutlass::arch::cpasync_barrier_arrive_noinc);
 
