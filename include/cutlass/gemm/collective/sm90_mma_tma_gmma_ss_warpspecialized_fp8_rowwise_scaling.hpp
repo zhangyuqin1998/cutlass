@@ -122,7 +122,7 @@ struct CollectiveMma<
     
     struct SharedStorage
     {
-      struct TensorStorage : cute::aligned_struct<128> {
+      struct TensorStorage : cute::aligned_struct<128, _0> {
       cute::array_aligned<typename TiledMma::ValTypeA, cute::cosize_v<SmemLayoutA>> smem_A;  // mxk
       cute::array_aligned<typename TiledMma::ValTypeB, cute::cosize_v<SmemLayoutB>> smem_B;  // nxk
       cute::array_aligned<ElementScale, cute::cosize_v<SmemLayoutScaleA>> smem_scale_A; // (BLK_M)
@@ -141,6 +141,7 @@ struct CollectiveMma<
     StrideA dA;
     ElementB const* ptr_B;
     StrideB dB;
+    uint32_t mma_promotion_interval = 4;
     ElementScale const* ptr_scale_A; 
     ElementScale const* ptr_scale_B;
   };
@@ -166,7 +167,7 @@ struct CollectiveMma<
     uint32_t tma_transaction_bytes = TmaTransactionBytes;
     uint32_t tma_transaction_bytes_mk = TmaTransactionBytesMK;
     uint32_t tma_transaction_bytes_nk = TmaTransactionBytesNK;
-    // uint32_t mma_promotion_interval = 4;
+    uint32_t mma_promotion_interval = 4;
     // Block scaling factors for A and B
     ElementScale const* ptr_scale_A; 
     ElementScale const* ptr_scale_B;
@@ -213,6 +214,7 @@ struct CollectiveMma<
       transaction_bytes,
       transaction_bytes_mk,
       transaction_bytes_nk,
+      args.mma_promotion_interval,
       args.ptr_scale_A,
       args.ptr_scale_B
     };
@@ -233,7 +235,7 @@ struct CollectiveMma<
     constexpr int min_tma_aligned_elements_B = tma_alignment_bits / cutlass::sizeof_bits<ElementB>::value;
     implementable = implementable && cutlass::detail::check_alignment<min_tma_aligned_elements_B>(cute::make_shape(N,K,L), StrideB{});
     /* MMA promotion interval should be a multiple of 4, since each mainloop iteration would issue 4 MMA instructions. */
-    // implementable = implementable && (args.mma_promotion_interval % 4 == 0);
+    implementable = implementable && (args.mma_promotion_interval % 4 == 0);
 
     if (!implementable) {
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Problem Size doesn't meet the minimum alignment requirements for TMA.\n");
@@ -344,26 +346,6 @@ struct CollectiveMma<
 
       Tensor gScaleA = mScaleA_mkl(_,m_coord);  // (BLK_M)
       Tensor gScaleB = mScaleB_nkl(_,n_coord);  // (BLK_N)
-
-
-    // printf("%d %d %d %d \n", threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y);
-      // TODO(zhangyuqin): 这里会影响性能
-    //   if (threadIdx.x == 0) {
-    //     for (int i = 0; i < 128; i++) {
-    //         sScaleA[i] = gScaleA[i];
-    //         sScaleB[i] = gScaleB[i];
-    //     }
-    //   }
-    //   if (threadIdx.x == 0 && blockIdx.x == 0) {
-        CUTLASS_PRAGMA_UNROLL
-        for (int i = 0; i < size<0>(gScaleA); i++) {
-            sScaleA[i] = gScaleA[i];
-        }
-        CUTLASS_PRAGMA_UNROLL
-        for (int i = 0; i < size<0>(gScaleB); i++) {
-            sScaleB[i] = gScaleB[i];
-        }
-    //   }
       
     //   static constexpr int BLK_M = size<0>(gScaleA);
     //   static constexpr int BLK_N = size<0>(gScaleB);
@@ -418,6 +400,16 @@ struct CollectiveMma<
         using BarrierType = typename MainloopPipeline::ProducerBarrierType;
         BarrierType* tma_barrier = pipeline.producer_get_barrier(smem_pipe_write);
 
+        if (k_tile_count  == 1) {
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < size<0>(gScaleA); i++) {
+              sScaleA[i] = gScaleA[i];
+          }
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < size<0>(gScaleB); i++) {
+              sScaleB[i] = gScaleB[i];
+          }
+        }
         // Copy operands A and B from global memory to shared memory
         copy(mainloop_params.tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
         copy(mainloop_params.tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,write_stage));
@@ -529,8 +521,7 @@ struct CollectiveMma<
 
     tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
 
-    // GmmaFP8Accumulation accumulation(accum, mainloop_params.mma_promotion_interval, size<2>(tCrA));
-    GmmaFP8Accumulation accumulation(accum, 4, size<2>(tCrA));
+    GmmaFP8Accumulation accumulation(accum, mainloop_params.mma_promotion_interval, size<2>(tCrA));
     warpgroup_fence_operand(accumulation());
     CUTLASS_PRAGMA_UNROLL
     for (int k_tile_prologue = prologue_mma_count; k_tile_prologue > 0; --k_tile_prologue)
