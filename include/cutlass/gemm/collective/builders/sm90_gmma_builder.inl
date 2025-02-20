@@ -74,7 +74,9 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
   constexpr auto b_bits = cute::sizeof_bits_v<ElementB>;
   constexpr int stage_bytes_ =
     cutlass::bits_to_bytes(a_bits * size<0>(TileShapeMNK{}) * size<2>(TileShapeMNK{})) +
-    cutlass::bits_to_bytes(b_bits * size<1>(TileShapeMNK{}) * size<2>(TileShapeMNK{}));
+    cutlass::bits_to_bytes(b_bits * size<1>(TileShapeMNK{}) * size<2>(TileShapeMNK{})) +
+    cutlass::bits_to_bytes(32 * size<0>(TileShapeMNK{})) +
+    cutlass::bits_to_bytes(32);
 
   constexpr int stage_bytes = cutlass::round_up(stage_bytes_, alignment) +
     static_cast<int>(mainloop_pipeline_bytes);
